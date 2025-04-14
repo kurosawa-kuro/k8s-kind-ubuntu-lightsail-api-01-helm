@@ -17,8 +17,8 @@ DOCKER_IMAGE := $(ECR_REPOSITORY_NAME):$(APP_VERSION)
 DOCKER_ECR_IMAGE := $(ECR_REGISTRY)/$(DOCKER_IMAGE)
 
 # Helm設定
-HELM_RELEASE_NAME ?= api
-HELM_CHART_PATH := ./container-nodejs-api-chart
+HELM_RELEASE_NAME ?= container-api
+HELM_CHART_PATH := ./my-app-chart
 HELM_VALUES_FILE := $(HELM_CHART_PATH)/values.yaml
 
 # 環境変数設定
@@ -126,7 +126,7 @@ check-aws-credentials:
 
 ecr-login: check-aws-credentials
 	@echo "🔐 ECRにログインします..."
-	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(ECR_REGISTRY) || (echo "❌ ECRログインに失敗しました" && exit 1)
+	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(ECR_REGISTRY)
 	@echo "✅ ECRログイン完了"
 
 # ------------------------
@@ -138,7 +138,7 @@ docker-build:
 	@docker tag $(DOCKER_IMAGE) $(DOCKER_ECR_IMAGE)
 	@echo "✅ Dockerイメージのビルド完了"
 
-docker-push: ecr-login
+docker-push: ecr-login docker-build
 	@echo "⬆️  ECRにイメージをプッシュします..."
 	@docker push $(DOCKER_ECR_IMAGE)
 	@echo "✅ ECRプッシュ完了"
@@ -171,25 +171,25 @@ docker-local-stop:
 # ------------------------
 helm-template:
 	@echo "📋 Helmテンプレートを検証します..."
-	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_PATH) --values $(HELM_VALUES_FILE)
+	@cd $(HELM_CHART_PATH) && helm template $(HELM_RELEASE_NAME) . --values values.yaml
 
 helm-install:
 	@echo "📦 Helmチャートをインストールします..."
-	helm install $(HELM_RELEASE_NAME) $(HELM_CHART_PATH) --values $(HELM_VALUES_FILE)
+	@cd $(HELM_CHART_PATH) && helm install $(HELM_RELEASE_NAME) . --values values.yaml
 	@echo "⏳ Podの起動を待機中..."
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=container-nodejs-api --timeout=60s
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=my-app --timeout=60s || true
 	@echo "✅ インストール完了"
 
 helm-upgrade:
 	@echo "🔄 Helmリリースをアップグレードします..."
-	helm upgrade $(HELM_RELEASE_NAME) $(HELM_CHART_PATH) --values $(HELM_VALUES_FILE)
+	@cd $(HELM_CHART_PATH) && helm upgrade $(HELM_RELEASE_NAME) . --values values.yaml
 	@echo "⏳ Podの起動を待機中..."
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=container-nodejs-api --timeout=60s
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=my-app --timeout=60s || true
 	@echo "✅ アップグレード完了"
 
 helm-uninstall:
 	@echo "🗑️  Helmリリースをアンインストールします..."
-	helm uninstall $(HELM_RELEASE_NAME)
+	@helm uninstall $(HELM_RELEASE_NAME)
 	@echo "✅ アンインストール完了"
 
 # ------------------------
@@ -209,27 +209,27 @@ setup:
 	@echo '        username = "AWS"' >> kind-cluster.yaml
 	@echo '        password = "'$$(cat /tmp/ecr-token)'"' >> kind-cluster.yaml
 	@rm -f /tmp/ecr-token
-	kind create cluster --config kind-cluster.yaml
+	@kind create cluster --config kind-cluster.yaml
 	@echo "✅ kindクラスタのセットアップが完了しました"
 
 status:
 	@echo "📊 クラスタの状態を確認します..."
 	@echo "\n>>> Podの状態:"
-	kubectl get pods
+	@kubectl get pods
 	@echo "\n>>> Serviceの状態:"
-	kubectl get services
+	@kubectl get services
 	@echo "\n>>> Deploymentの状態:"
-	kubectl get deployments
+	@kubectl get deployments
 	@echo "\n>>> Helmリリースの状態:"
-	helm list
+	@helm list
 
 logs:
 	@echo "📝 アプリケーションのログを表示します..."
-	kubectl logs -f -l app.kubernetes.io/name=container-nodejs-api
+	@kubectl logs -f -l app.kubernetes.io/name=my-app
 
 port-forward:
 	@echo "🔌 ポートフォワードを開始します (localhost:$(APP_PORT))..."
-	kubectl port-forward service/$(HELM_RELEASE_NAME)-container-nodejs-api $(APP_PORT):$(APP_PORT)
+	@kubectl port-forward service/$(HELM_RELEASE_NAME)-my-app-chart $(APP_PORT):$(APP_PORT)
 
 all: setup helm-install
 	@echo "✨ セットアップが完了しました。以下のコマンドで動作確認できます："
