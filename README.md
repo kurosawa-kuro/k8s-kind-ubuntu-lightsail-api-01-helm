@@ -68,6 +68,9 @@ EOF
 ### 2-3. Kind クラスター起動
 
 ```bash
+# クラスターを削除
+kind delete cluster
+
 kind create cluster --config kind-cluster.yaml
 kind get clusters
 # => "kind" が表示されればOK
