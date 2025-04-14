@@ -1,129 +1,56 @@
-以下では、**Helm** の標準雛形（`helm create`）で生成されるテンプレートファイルを **できるだけ弄らず** に、  
-- **Ingress**  
-- **ServiceAccount**  
-- **HPA**  
-
-のそれぞれを **`values.yaml` 上のフラグで無効化（enabled=false）** する方法を中心としたチュートリアルをまとめます。  
-最終的に **Kind クラスター** 上でテストし、**Deployment/Service** のみが有効になったアプリケーションをデプロイします。
-
----
-
 # 目次
 
-1. [事前準備](#1-事前準備)  
-2. [Kind クラスターの作成](#2-kind-クラスターの作成)  
-3. [Helm Chart の雛形作成 (`helm create`)](#3-helm-chart-の雛形作成-helm-create)  
-4. [values.yaml による無効化設定（最重要ポイント）](#4-valuesyaml-による無効化設定最重要ポイント)  
-5. [テンプレートへの最小限の確認作業 (任意)](#5-テンプレートへの最小限の確認作業-任意)  
-6. [`helm template` で検証](#6-helm-template-で検証)  
-7. [`helm install` でデプロイ](#7-helm-install-でデプロイ)  
-8. [動作確認 (port-forward)](#8-動作確認-port-forward)  
-9. [アップグレード例 (replicaCount 変更)](#9-アップグレード例-replicacount-変更)  
-10. [アンインストール](#10-アンインストール)  
-11. [まとめ](#11-まとめ)  
+1. **Chart の構造・ファイル内容**  
+2. **Helm install / upgrade / uninstall**  
+3. **port-forward で動作確認**  
+
+> - 引き続き **Ingress 不要・禁止**  
+> - **NodePort も使わない**  
+> - **サーバ内部でのみアクセス**  
+> - イメージ: `986154984217.dkr.ecr.ap-northeast-1.amazonaws.com/container-nodejs-api-8080:latest`  
+> - コンテナポート: **8080**  
 
 ---
 
-## 1. 事前準備
+## 1️⃣ Chart の構造・ファイル内容
 
-- **Docker** がインストールされ、`docker ps` などが実行可能
-- **Kind** (Kubernetes in Docker) がインストール済み
-- **Helm** がインストール済み
-- **AWS CLI** がインストールされ、`aws ecr get-login-password` が実行可能 (ECR ログインに使用)
-- `kubectl` で Kubernetes にアクセスできる環境
-
----
-
-## 2. Kind クラスターの作成
-
-1) **ECR へのログイン用トークンを取得**
-
-```bash
-ECR_TOKEN=$(aws ecr get-login-password --region ap-northeast-1)
-```
-
-2) **kind クラスター設定ファイルを作成**
-
-```bash
-cat <<EOF > kind-cluster.yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-  - role: control-plane
-    extraPortMappings:
-      - containerPort: 80
-        hostPort: 80
-containerdConfigPatches:
-  - |-
-    [plugins."io.containerd.grpc.v1.cri".registry]
-      [plugins."io.containerd.grpc.v1.cri".registry.auths."503561449641.dkr.ecr.ap-northeast-1.amazonaws.com"]
-        username = "AWS"
-        password = "$ECR_TOKEN"
-EOF
-```
-
-> - `503561449641.dkr.ecr.ap-northeast-1.amazonaws.com` の部分は適宜ご自身の ECR レジストリに書き換えてください。
-
-3) **kind クラスター起動**
-
-```bash
-kind create cluster --config kind-cluster.yaml
-kind get clusters
-# => "kind" が表示されればOK
-```
-
----
-
-## 3. Helm Chart の雛形作成 (`helm create`)
-
-```bash
-# 任意の作業ディレクトリで
-mkdir -p ~/dev/k8s-kind-helm-tutorial
-cd ~/dev/k8s-kind-helm-tutorial
-
-# chart名: my-app-chart とする例
-helm create my-app-chart
-```
-
-実行すると、以下の構成が自動生成されます。
-
-```
-my-app-chart/
-├── Chart.yaml
-├── charts/
-├── .helmignore
-├── templates/
-│   ├── _helpers.tpl
-│   ├── tests/
-│   ├── serviceaccount.yaml
-│   ├── deployment.yaml
-│   ├── hpa.yaml
-│   ├── ingress.yaml
-│   └── service.yaml
-└── values.yaml
-```
-
-> **ポイント**: ここでは **ファイルを削除しません**  
-> → Ingress/HPA/ServiceAccount 等も残したまま、`values.yaml` の設定で無効化を行います。
-
----
-
-## 4. values.yaml による無効化設定（最重要ポイント）
-
-`my-app-chart/values.yaml` を開き、**Ingress, ServiceAccount, HPA** を `enabled: false` に設定します。  
-（標準生成された雛形には一部 `ingress.enabled` / `autoscaling.enabled` が用意されていない場合があります。その場合は下記を追加してください）
+### 1-1. Chart.yaml
 
 ```yaml
-# replicas
+apiVersion: v2
+name: my-app-chart
+description: A Helm chart for my-app
+version: 0.1.0
+appVersion: "1.0"
+```
+
+### 1-2. values.yaml
+
+```yaml
+# replicas (Deployment)
 replicaCount: 1
 
-# image
+# イメージ設定
 image:
-  repository: 111111111111.dkr.ecr.ap-northeast-1.amazonaws.com/my-app
+  repository: 986154984217.dkr.ecr.ap-northeast-1.amazonaws.com/container-nodejs-api-8080
   tag: "latest"
   pullPolicy: Always
 
-# Ingress (無効化)
+# コンテナのポート
+containerPort: 8080
+
+# Service設定
+service:
+  type: ClusterIP
+  port: 8080
+
+# ServiceAccount設定
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+# Ingress設定（無効化）
 ingress:
   enabled: false
   className: ""
@@ -131,28 +58,14 @@ ingress:
   hosts: []
   tls: []
 
-# ServiceAccount (無効化)
-serviceAccount:
-  create: false
-  name: ""
-  annotations: {}
-
-# HPA / Autoscaling (無効化)
+# オートスケーリング設定（無効化）
 autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
 
-# Service
-service:
-  type: ClusterIP
-  port: 80
-
-# (アプリ内部でListenするポート例)
-containerPort: 8080
-
-# リソース設定例
+# リソース制限
 resources:
   requests:
     cpu: 100m
@@ -162,121 +75,132 @@ resources:
     memory: 256Mi
 ```
 
-> - `image.repository` / `image.tag` を **ECR 上のご自身のイメージ**に変更してください。  
-> - `containerPort` は使用するアプリのポートに合わせます（例: 8080）。  
-> - `service.port` は Kubernetes 上で公開するポートとして合わせます（例: 80 or 8080）。  
-
-### 重要:
-- `ingress.enabled: false`  
-- `serviceAccount.create: false`  
-- `autoscaling.enabled: false`  
-
-これらをしっかり設定することで、後述のテンプレートが **無効** 扱いになります。
-
----
-
-## 5. テンプレートへの最小限の確認作業 (任意)
-
-`helm create` の標準テンプレートには、`{{- if .Values.ingress.enabled }}` や `{{- if .Values.autoscaling.enabled }}` のような条件分岐が **既に** 書かれている場合が多いです。
-
-**例:** `ingress.yaml` に
+### 1-3. templates/deployment.yaml
 
 ```yaml
-{{- if .Values.ingress.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-...
-{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "my-app-chart.fullname" . }}
+  labels:
+    {{- include "my-app-chart.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "my-app-chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "my-app-chart.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "my-app-chart.serviceAccountName" . }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
 ```
 
-のような記述があれば OK。  
-もし入っていないなら、先頭に `{{- if .Values.ingress.enabled }}` / `{{- end }}` を追加してください。  
+### 1-4. templates/service.yaml
 
-同様に、`hpa.yaml` や `serviceaccount.yaml` にも `{{ if .Values.autoscaling.enabled }}` や `{{ if .Values.serviceAccount.create }}` があるかを確認し、必要なら追加します。
-
-> - **「できるだけテンプレートは弄らない」** という方針なので、標準雛形に if 分岐が無い場合は最低限そこだけ足してください。  
-> - それ以外の大規模な改変やファイル削除はせずに済みます。
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "my-app-chart.fullname" . }}
+  labels:
+    {{- include "my-app-chart.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "my-app-chart.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.containerPort }}
+      protocol: TCP
+      name: http
+```
 
 ---
 
-## 6. `helm template` で検証
+## 2️⃣ Helm install / upgrade / uninstall
+
+### 2-1. テンプレートの検証
 
 ```bash
-cd my-app-chart
+cd ~/dev/k8s-kind-ubuntu-lightsail-api-01-helm/my-app-chart
+
+# YAML出力を確認
 helm template . --values values.yaml
 ```
 
-- `ingress.enabled=false` → `ingress.yaml` は **出力されない**  
-- `autoscaling.enabled=false` → `hpa.yaml` は **出力されない**  
-- `serviceAccount.create=false` → `serviceaccount.yaml` は **出力されない**  
-
-これで、Deployment / Service のみが出力されれば成功です。  
-もし無効化されずに出力される場合は、テンプレート側に if 分岐が無いなどの原因が考えられます。
-
----
-
-## 7. `helm install` でデプロイ
+### 2-2. インストール
 
 ```bash
-# リリース名: my-app
-helm install my-app . --values values.yaml
+# リリース名 container-api でインストール
+helm install container-api . --values values.yaml
+```
 
+実行後、Kubernetes リソースが作成されたことを確認します。
+
+```bash
 kubectl get pods
 kubectl get svc
 helm list
 ```
 
-Pod が `Running` になっていれば成功。  
-`kubectl describe pod` などで image が正しくPullできているか確認すると安心です。
+### 2-3. アップグレード
+
+```bash
+# 例: replicas を 2 に増やす場合
+helm upgrade container-api . --set replicaCount=2
+```
+
+### 2-4. アンインストール
+
+```bash
+helm uninstall container-api
+```
 
 ---
 
-## 8. 動作確認 (port-forward)
-
-Ingress や NodePort を使わない構成なら、`port-forward` でローカルアクセスします。
+## 3️⃣ port-forward で動作確認
 
 ```bash
-# Service名は "my-app-my-app-chart" (helm createの命名規則による)
-kubectl port-forward service/my-app-my-app-chart 8080:80
+# Service名を確認
+kubectl get svc
 
-# コンテナの中では 8080 でリッスンしている場合
-# => "service port 80" → "targetPort 8080" というマッピング
+# 正しいService名でport-forward
+kubectl port-forward service/container-api-my-app-chart 8080:8080
+
+# 別ターミナルで確認
 curl -v http://localhost:8080/
+# => {"status":"ok","timestamp":"2025-04-14T03:40:12.137Z"}
 ```
+
+> **重要**: Service名は `container-api-my-app-chart` となります。これは Helm のリリース名とチャート名から自動生成されます。
 
 ---
 
-## 9. アップグレード例 (replicaCount 変更)
+# まとめ
 
-```bash
-helm upgrade my-app . --set replicaCount=2
-kubectl get pods
-```
+- **Helm Chart** を用いることで、Kubernetes リソースをまとめてパッケージ化し、一括デプロイできます。
+- **Ingress, NodePort** 不要の構成を維持しながら、Helm の利点を活用できます。
+- ServiceAccount や HPA など、将来の拡張に備えた設定も含まれています。
+- **ポート設定** は、コンテナポート、サービスポート共に **8080** を使用します。
 
-Pod が 2つに増えれば OK。
-
----
-
-## 10. アンインストール
-
-```bash
-helm uninstall my-app
-```
-
-これで作成したリソース（Deployment, Service, etc.）が削除されます。
-
----
-
-## 11. まとめ
-
-1. **`helm create`** で雛形を作成し、Ingress / HPA / ServiceAccount などの **テンプレートファイルを削除せず** に残す  
-2. **`values.yaml`** で `ingress.enabled = false`, `autoscaling.enabled = false`, `serviceAccount.create = false` を設定  
-3. テンプレートに `{{ if .Values.xxx.enabled }}` があるか最小限だけ確認（なければ追加）  
-4. **`helm template`** → 出力を確認  
-5. **`helm install`** → Kubernetes にデプロイ  
-6. **`kubectl port-forward`** などで動作確認  
-
-これにより「Ingress/HPA/ServiceAccount が無効化された最小構成の Helm チャート」がデプロイされます。  
-**将来的に使いたくなったら** `ingress.enabled=true` などとするだけでリソースを有効化でき、柔軟に拡張可能です。
-
-> - テンプレートを削除しなくてよいので、あとで機能をオンにするだけで簡単に使える点がメリットです。  
+主な修正ポイント：
+1. チャート名とリリース名の一貫性を保持
+2. ポート番号を8080に統一
+3. Service名の正確な記述
+4. 手順の明確化と詳細な説明の追加
